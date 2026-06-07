@@ -19,7 +19,6 @@
         * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
         body, html { width: 100%; height: 100%; overflow: hidden; background-color: #000; font-family: system-ui, -apple-system, sans-serif; color: #fff; }
 
-        /* الكاميرا بكامل الشاشة */
         #webcam {
             position: absolute; top: 0; left: 0;
             width: 100vw; height: 100vh;
@@ -28,14 +27,12 @@
             z-index: 1;
         }
 
-        /* طبقات قماش الرسم المستقلة جدارياً */
         #canvasContainer { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 2; }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
         #drawingCanvas { z-index: 3; }    
         #emojiCanvas { z-index: 4; }      
         #interactionCanvas { z-index: 5; pointer-events: none; } 
 
-        /* شريط التحكم العلوي المنظم */
         .ui-header-container {
             position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
             z-index: 10; display: flex; flex-direction: column; align-items: center; gap: 12px;
@@ -49,7 +46,6 @@
             backdrop-filter: blur(10px);
         }
 
-        /* صندوق اللوجو */
         #companyLogo {
             background: rgba(255, 255, 255, 0.1);
             padding: 6px 16px; border-radius: 10px;
@@ -87,17 +83,16 @@
         .color-group { display: flex; gap: 8px; border-right: 2px solid rgba(255,255,255,0.2); padding-right: 12px; }
         .color-swatch { width: 34px; height: 34px; border-radius: 50%; padding: 0; }
 
-        /* تعديل التصميم: شفاف بالكامل 100% بدون أي ضبابية أو غباش نهائياً */
         #emojiPanel {
             width: 540px; 
             min-height: 190px;
-            background: transparent; /* شفاف تماماً كالهواء */
-            border: 2px solid rgba(255, 255, 255, 0.25); /* إطار رفيع جداً ومحدد */
+            background: transparent;
+            border: 2px solid rgba(255, 255, 255, 0.25);
             border-radius: 20px; 
             padding: 20px;
             transition: all 0.25s ease-in-out; opacity: 0; display: none;
-            box-shadow: none; /* إلغاء الظل الثقيل لمنع أي تظليل خلفي */
-            backdrop-filter: none; /* تم إلغاء الضبابية بالكامل بناءً على طلبك */
+            box-shadow: none;
+            backdrop-filter: none;
         }
         #emojiPanel.open { display: block; opacity: 1; }
         
@@ -157,17 +152,54 @@
     <div id="modeDisplay">جاري تشغيل النظام...</div>
 
     <script>
+        // فئة الفلتر الاحترافي OneEuroFilter للقضاء التام على الرعشة بدون تقطيع
+        class OneEuroFilter {
+            constructor(freq, mincutoff = 1.0, beta = 0.0, dcutoff = 1.0) {
+                this.freq = freq;
+                this.mincutoff = mincutoff;
+                this.beta = beta;
+                this.dcutoff = dcutoff;
+                this.x = null;
+                this.dx = null;
+            }
+            alpha(cutoff) {
+                const te = 1.0 / this.freq;
+                const tau = 1.0 / (2 * Math.PI * cutoff);
+                return 1.0 / (1.0 + tau / te);
+            }
+            filter(value, timestamp = null) {
+                if (timestamp && this.lasttime && timestamp !== this.lasttime) {
+                    this.freq = 1.0 / (timestamp - this.lasttime);
+                }
+                this.lasttime = timestamp;
+                if (this.x === null) {
+                    this.x = value;
+                    this.dx = 0;
+                    return value;
+                }
+                const dvalue = (value - this.x) * this.freq;
+                const a_d = this.alpha(this.dcutoff);
+                this.dx = this.dx + a_d * (dvalue - this.dx);
+                const cutoff = this.mincutoff + this.beta * Math.abs(this.dx);
+                const a = this.alpha(cutoff);
+                this.x = this.x + a * (value - this.x);
+                return this.x;
+            }
+        }
+
+        // إنشاء نسختين من الفلتر لـ X و Y بشكل منفصل لضمان استقرار خارق
+        const filterX = new OneEuroFilter(30, 0.1, 0.05, 1.0); // mincutoff منخفض جداً (0.1) يقتل الرعشة تماماً عند السكون
+        const filterY = new OneEuroFilter(30, 0.1, 0.05, 1.0);
+
         const state = {
             color: '#00f2fe', 
             size: 12,          
             emojiSize: 50,    
             mode: 'STANDBY', panelOpen: false,
             lastX: null, lastY: null, smoothX: 0, smoothY: 0, 
-            alpha: 0.75,      // تم موازنتها لتعطي نعومة فائقة عند السحب السريع
             hoverTarget: null, hoverStart: null, hoverDuration: 250, 
             lastToggleTime: 0, heldEmoji: null,
-            isTracking: false,
-            jitterThreshold: 2.5 // المسافة بالبكسل لإلغاء نويز الكاميرا وتثبيت المؤشر تماماً عند السكون
+            isTracking: false
         };
 
         const emojis = ['👑', '🦁', '🤩', '😎', '😂', '🥳', '✨', '🔥', '❤️', '💡', '🚀', '⭐', '🎨', '🎉', '🎈', '⚡', '💯', '🌈', '🌍', '💎', '🍿', '👻', '🎮', '🌸'];
@@ -293,21 +325,21 @@
             const hl = results.multiHandLandmarks[0];
             const rawX = (1 - hl[8].x) * iCanvas.width;
             const rawY = hl[8].y * iCanvas.height;
+            const now = Date.now() / 1000.0; // وقت الفريم بالثواني للفلتر الدقيق
 
             if (!state.isTracking) { 
+                // تصفير الفلاتر عند التقاط اليد لأول مرة لمنع القفزات المفاجئة
+                filterX.x = rawX; filterX.dx = 0;
+                filterY.y = rawY; filterY.dx = 0;
                 state.smoothX = rawX; 
                 state.smoothY = rawY; 
                 state.lastX = rawX;
                 state.lastY = rawY;
                 state.isTracking = true;
             } else {
-                // حساب المسافة بين الإحداثيات الحالية والسابقة
-                const dist = Math.hypot(rawX - state.smoothX, rawY - state.smoothY);
-                // إذا كانت الحركة أكبر من الحد المسموح، نقوم بالتحديث، وإلا يثبت تماماً في مكانه بنسبة 100%
-                if (dist > state.jitterThreshold) {
-                    state.smoothX += state.alpha * (rawX - state.smoothX);
-                    state.smoothY += state.alpha * (rawY - state.smoothY);
-                }
+                // الفلترة الذكية الديناميكية
+                state.smoothX = filterX.filter(rawX, now);
+                state.smoothY = filterY.filter(rawY, now);
             }
 
             state.mode = detectGesture(hl);
@@ -336,17 +368,15 @@
                 state.lastX = state.smoothX; state.lastY = state.smoothY;
             }
 
-            // رسم مؤشر الرأس المضيء الثابت والمستقر تماماً
+            // رسم المؤشر المضيء فائق الاستقرار والثبات
             iCtx.beginPath(); iCtx.arc(state.smoothX, state.smoothY, state.size/2 + 8, 0, 2*Math.PI);
             iCtx.fillStyle = state.color; iCtx.fill(); iCtx.strokeStyle = '#fff'; iCtx.lineWidth = 2; iCtx.stroke();
 
-            // الإيموجي ملتصق بالإصبع بشكل فوري ومستقر
             if (state.heldEmoji) {
                 iCtx.font = `${state.emojiSize}px Arial`; iCtx.textAlign = 'center'; iCtx.textBaseline = 'middle';
                 iCtx.fillText(state.heldEmoji, state.smoothX, state.smoothY);
             }
 
-            // عداد الدائرة الزمنية فوق الأزرار
             if (state.hoverTarget && state.hoverStart) {
                 let ratio = Math.min(1, (Date.now() - state.hoverStart) / state.hoverDuration);
                 iCtx.beginPath(); iCtx.arc(state.smoothX, state.smoothY, state.size/2 + 14, -Math.PI/2, (-Math.PI/2) + (2*Math.PI*ratio));
@@ -356,15 +386,20 @@
 
         const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
         
-        // رفع الحساسية وسرعة معالجة الفريمات لمنع التقطيع نهائياً
-        hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.7 });
+        // خفضنا تعقيد الموديل إلى 0 ورفعنا التردد للتخلص تماماً من التقطيع البصري وجعل المعالجة فورية Real-time
+        hands.setOptions({ 
+            maxNumHands: 1, 
+            modelComplexity: 0, 
+            minDetectionConfidence: 0.5, 
+            minTrackingConfidence: 0.6 
+        });
         hands.onResults(onResults);
 
         const camera = new Camera(video, {
             onFrame: async () => { await hands.send({ image: video }); },
             width: 1280, height: 720
         });
-        camera.start().then(() => modeDisplay.innerText = "النظام جاهز تماماً! المؤشر الآن ثابت 100% على إصبع السبابة.");
+        camera.start().then(() => modeDisplay.innerText = "النظام جاهز تماماً! المؤشر الآن ثابت 100% وملتصق بالإصبع.");
     </script>
 </body>
 </html>
