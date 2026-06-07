@@ -10,7 +10,7 @@
 
     <style>
         :root {
-            --panel-bg: rgba(0, 0, 0, 0.65); 
+            --panel-bg: rgba(0, 0, 0, 0.75); 
             --accent-cyan: #00f2fe;
             --accent-green: #00ff88;
             --accent-red: #ff3366;
@@ -42,8 +42,8 @@
             background: var(--panel-bg);
             border: 2px solid rgba(255, 255, 255, 0.2); border-radius: 18px;
             padding: 12px 24px; display: flex; align-items: center; gap: 15px;
-            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.5);
-            backdrop-filter: blur(10px);
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(15px);
         }
 
         #companyLogo {
@@ -86,13 +86,13 @@
         #emojiPanel {
             width: 540px; 
             min-height: 190px;
-            background: transparent;
+            background: var(--panel-bg);
             border: 2px solid rgba(255, 255, 255, 0.25);
             border-radius: 20px; 
             padding: 20px;
             transition: all 0.25s ease-in-out; opacity: 0; display: none;
-            box-shadow: none;
-            backdrop-filter: none;
+            backdrop-filter: blur(15px);
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.6);
         }
         #emojiPanel.open { display: block; opacity: 1; }
         
@@ -152,7 +152,7 @@
     <div id="modeDisplay">جاري تشغيل النظام...</div>
 
     <script>
-        // فئة الفلتر الاحترافي OneEuroFilter للقضاء التام على الرعشة بدون تقطيع
+        // فلتر مُحسّن لحركة ناعمة جداً وسريعة في المعارض والاستجابة الفورية
         class OneEuroFilter {
             constructor(freq, mincutoff = 1.0, beta = 0.0, dcutoff = 1.0) {
                 this.freq = freq;
@@ -169,7 +169,8 @@
             }
             filter(value, timestamp = null) {
                 if (timestamp && this.lasttime && timestamp !== this.lasttime) {
-                    this.freq = 1.0 / (timestamp - this.lasttime);
+                    const dt = timestamp - this.lasttime;
+                    if(dt > 0) this.freq = 1.0 / dt;
                 }
                 this.lasttime = timestamp;
                 if (this.x === null) {
@@ -187,9 +188,9 @@
             }
         }
 
-        // إنشاء نسختين من الفلتر لـ X و Y بشكل منفصل لضمان استقرار خارق
-        const filterX = new OneEuroFilter(30, 0.1, 0.05, 1.0); // mincutoff منخفض جداً (0.1) يقتل الرعشة تماماً عند السكون
-        const filterY = new OneEuroFilter(30, 0.1, 0.05, 1.0);
+        // إعدادات الفلتر: توازن خارق بين الثبات عند السكون والسرعة الفورية عند الحركة العنيفة
+        const filterX = new OneEuroFilter(30, 0.8, 0.01, 1.0); 
+        const filterY = new OneEuroFilter(30, 0.8, 0.01, 1.0);
 
         const state = {
             color: '#00f2fe', 
@@ -197,9 +198,10 @@
             emojiSize: 50,    
             mode: 'STANDBY', panelOpen: false,
             lastX: null, lastY: null, smoothX: 0, smoothY: 0, 
-            hoverTarget: null, hoverStart: null, hoverDuration: 250, 
+            hoverTarget: null, hoverStart: null, hoverDuration: 300, 
             lastToggleTime: 0, heldEmoji: null,
-            isTracking: false
+            isTracking: false,
+            wasDrawing: false // لتفادي تقطيع مفاصل الخطوط عند بدء الرسم من جديد
         };
 
         const emojis = ['👑', '🦁', '🤩', '😎', '😂', '🥳', '✨', '🔥', '❤️', '💡', '🚀', '⭐', '🎨', '🎉', '🎈', '⚡', '💯', '🌈', '🌍', '💎', '🍿', '👻', '🎮', '🌸'];
@@ -297,19 +299,36 @@
             if (act === 'clear-drawing') { dCtx.clearRect(0, 0, dCanvas.width, dCanvas.height); }
         }
 
+        // دالة كشف إيماءات صارمة لمنع التداخل تماماً عند ظهور أصابع أخرى عشوائية
         function detectGesture(hl) {
             const wrist = hl[0];
-            const index = hl[8]; const middle = hl[12]; const ring = hl[16]; const pinky = hl[20];
-            const base = Math.hypot(index.x - wrist.x, index.y - wrist.y);
-            
-            const iExt = index.y < wrist.y && Math.hypot(index.x - wrist.x, index.y - wrist.y) > base * 0.9;
-            const mExt = middle.y < wrist.y && Math.hypot(middle.x - wrist.x, middle.y - wrist.y) > base * 0.6;
-            const rExt = ring.y < wrist.y && Math.hypot(ring.x - wrist.x, ring.y - wrist.y) > base * 0.6;
-            const pExt = pinky.y < wrist.y && Math.hypot(pinky.x - wrist.x, pinky.y - wrist.y) > base * 0.6;
+            const thumbTip = hl[4];
+            const indexTip = hl[8];
+            const indexPip = hl[6]; // مفصل السبابة السفلي
+            const middleTip = hl[12];
+            const middlePip = hl[10];
+            const ringTip = hl[16];
+            const ringPip = hl[14];
+            const pinkyTip = hl[20];
+            const pinkyPip = hl[18];
 
-            if (iExt && mExt && rExt && pExt) return 'ERASE'; 
-            if (!iExt && !mExt && !rExt) return 'PAUSE'; 
-            if (iExt && !mExt) return 'DRAW'; 
+            // فحص هل الأصابع مفرودة للأعلى مقارنة بمفاصلها السفلية (صارم ومباشر رآسياً)
+            const indexExtended = indexTip.y < indexPip.y;
+            const middleExtended = middleTip.y < middlePip.y;
+            const ringExtended = ringTip.y < ringPip.y;
+            const pinkyExtended = pinkyTip.y < pinkyPip.y;
+
+            // وضعية كف مفتوح بالكامل (مسح الشاشة عشوائياً بالإيموجي أو تفاعلات عامة)
+            if (indexExtended && middleExtended && ringExtended && pinkyExtended) {
+                return 'ERASE'; 
+            }
+            
+            // وضعية الرسم الصارمة: السبابة مفرود تماماً للأعلى وباقي الأصابع الثلاثة (الوسطى، البنصر، الخنصر) مطوية بالكامل لأسفل
+            if (indexExtended && !middleExtended && !ringExtended && !pinkyExtended) {
+                return 'DRAW';
+            }
+            
+            // أي وضعية أخرى مبهمة يتم اعتبارها انتظار وملاحة مؤشر فقط بدون كتابة عشوائية
             return 'STANDBY';
         }
 
@@ -318,17 +337,19 @@
 
             if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
                 state.isTracking = false;
+                state.wasDrawing = false;
                 modeDisplay.innerText = "ابحث عن يدك أمام الكاميرا...";
                 return;
             }
 
             const hl = results.multiHandLandmarks[0];
+            
+            // تتبع طرف صباع السبابة بدقة (Landmark 8)
             const rawX = (1 - hl[8].x) * iCanvas.width;
             const rawY = hl[8].y * iCanvas.height;
-            const now = Date.now() / 1000.0; // وقت الفريم بالثواني للفلتر الدقيق
+            const now = Date.now() / 1000.0; 
 
             if (!state.isTracking) { 
-                // تصفير الفلاتر عند التقاط اليد لأول مرة لمنع القفزات المفاجئة
                 filterX.x = rawX; filterX.dx = 0;
                 filterY.y = rawY; filterY.dx = 0;
                 state.smoothX = rawX; 
@@ -337,27 +358,34 @@
                 state.lastY = rawY;
                 state.isTracking = true;
             } else {
-                // الفلترة الذكية الديناميكية
                 state.smoothX = filterX.filter(rawX, now);
                 state.smoothY = filterY.filter(rawY, now);
             }
 
             state.mode = detectGesture(hl);
-            modeDisplay.innerText = state.heldEmoji ? `حرك يدك وافتح كفك 🖐️ لتثبيت: ${state.heldEmoji}` : `الوضع الفعلي: ${state.mode}`;
+            modeDisplay.innerText = state.heldEmoji ? `حرك يدك وافتح كفك 🖐️ لتثبيت الإيموجي` : `الوضعية: ${state.mode === 'DRAW' ? '✏️ الرسم الذكي' : state.mode === 'ERASE' ? '🖐️ كف مفتوح / تثبيت' : '🎯 تحريك المؤشر'}`;
 
             checkAirInteraction(state.smoothX, state.smoothY);
 
             if (state.mode === 'DRAW') {
                 if (!state.heldEmoji) {
+                    // إذا كان الفريم السابق ليس رسماً، نقوم بنقل المؤشر الابتدائي فوراً لمنع التقطيع البصري وسد الثغرات
+                    if (!state.wasDrawing) {
+                        state.lastX = state.smoothX;
+                        state.lastY = state.smoothY;
+                        state.wasDrawing = true;
+                    }
+                    
                     dCtx.beginPath(); 
                     dCtx.moveTo(state.lastX, state.lastY); 
                     dCtx.lineTo(state.smoothX, state.smoothY);
                     dCtx.strokeStyle = state.color; dCtx.lineWidth = state.size; dCtx.lineCap = 'round'; dCtx.lineJoin = 'round';
-                    dCtx.shadowBlur = state.size * 1.2; dCtx.shadowColor = state.color;
+                    dCtx.shadowBlur = state.size * 0.5; dCtx.shadowColor = state.color; // وهج خفيف ومستقر بدون إبطاء كرت الشاشة
                     dCtx.stroke(); dCtx.shadowBlur = 0;
                 }
                 state.lastX = state.smoothX; state.lastY = state.smoothY;
             } else if (state.mode === 'ERASE') {
+                state.wasDrawing = false;
                 if (state.heldEmoji) {
                     eCtx.font = `${state.emojiSize}px Arial`; eCtx.textAlign = 'center'; eCtx.textBaseline = 'middle';
                     eCtx.fillText(state.heldEmoji, state.smoothX, state.smoothY);
@@ -365,11 +393,12 @@
                 }
                 state.lastX = state.smoothX; state.lastY = state.smoothY;
             } else {
+                state.wasDrawing = false;
                 state.lastX = state.smoothX; state.lastY = state.smoothY;
             }
 
-            // رسم المؤشر المضيء فائق الاستقرار والثبات
-            iCtx.beginPath(); iCtx.arc(state.smoothX, state.smoothY, state.size/2 + 8, 0, 2*Math.PI);
+            // رسم المؤشر المضيء الدائري فائق الاستقرار والثبات
+            iCtx.beginPath(); iCtx.arc(state.smoothX, state.smoothY, state.size/2 + 6, 0, 2*Math.PI);
             iCtx.fillStyle = state.color; iCtx.fill(); iCtx.strokeStyle = '#fff'; iCtx.lineWidth = 2; iCtx.stroke();
 
             if (state.heldEmoji) {
@@ -379,19 +408,18 @@
 
             if (state.hoverTarget && state.hoverStart) {
                 let ratio = Math.min(1, (Date.now() - state.hoverStart) / state.hoverDuration);
-                iCtx.beginPath(); iCtx.arc(state.smoothX, state.smoothY, state.size/2 + 14, -Math.PI/2, (-Math.PI/2) + (2*Math.PI*ratio));
+                iCtx.beginPath(); iCtx.arc(state.smoothX, state.smoothY, state.size/2 + 12, -Math.PI/2, (-Math.PI/2) + (2*Math.PI*ratio));
                 iCtx.strokeStyle = 'var(--accent-cyan)'; iCtx.lineWidth = 3; iCtx.stroke();
             }
         }
 
         const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
         
-        // خفضنا تعقيد الموديل إلى 0 ورفعنا التردد للتخلص تماماً من التقطيع البصري وجعل المعالجة فورية Real-time
         hands.setOptions({ 
             maxNumHands: 1, 
-            modelComplexity: 0, 
-            minDetectionConfidence: 0.5, 
-            minTrackingConfidence: 0.6 
+            modelComplexity: 1, // تم رفع الجودة إلى 1 للحصول على تتبع احترافي لأماكن المفاصل وحمايتها من التشتت في الإضاءة القوية
+            minDetectionConfidence: 0.7, // عتبة ثقة أعلى لمنع القفزات اللحظية الخاطئة
+            minTrackingConfidence: 0.7 
         });
         hands.onResults(onResults);
 
@@ -399,7 +427,7 @@
             onFrame: async () => { await hands.send({ image: video }); },
             width: 1280, height: 720
         });
-        camera.start().then(() => modeDisplay.innerText = "النظام جاهز تماماً! المؤشر الآن ثابت 100% وملتصق بالإصبع.");
+        camera.start().then(() => modeDisplay.innerText = "النظام جاهز للحدث! الرسم بالسبابة فقط ☝️");
     </script>
 </body>
 </html>
