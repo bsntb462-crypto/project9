@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>استوديو الرسم الهوائي الاحترافي للمعارض</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        :root {
+            --panel-bg: rgba(0, 0, 0, 0.65); 
+            --accent-cyan: #00f2fe;
+            --accent-green: #00ff88;
+            --accent-red: #ff3366;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+        body, html { width: 100%; height: 100%; overflow: hidden; background-color: #000; font-family: system-ui, -apple-system, sans-serif; color: #fff; }
+
+        /* الكاميرا بكامل الشاشة */
+        #webcam {
+            position: absolute; top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            object-fit: cover;
+            transform: scaleX(-1);
+            z-index: 1;
+        }
+
+        /* طبقات قماش الرسم المستقلة جدارياً */
+        #canvasContainer { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 2; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        #drawingCanvas { z-index: 3; }    
+        #emojiCanvas { z-index: 4; }      
+        #interactionCanvas { z-index: 5; pointer-events: none; } 
+
+        /* شريط التحكم العلوي المنظم */
+        .ui-header-container {
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            z-index: 10; display: flex; flex-direction: column; align-items: center; gap: 12px;
+        }
+
+        .ui-panel {
+            background: var(--panel-bg);
+            border: 2px solid rgba(255, 255, 255, 0.2); border-radius: 18px;
+            padding: 12px 24px; display: flex; align-items: center; gap: 15px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(10px);
+        }
+
+        /* صندوق اللوجو */
+        #companyLogo {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 6px 16px; border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            display: flex; align-items: center; justify-content: center;
+            min-width: 100px;
+        }
+        #logoPlaceholder { font-size: 16px; font-weight: bold; color: var(--accent-cyan); }
+
+        .hoverable { 
+            padding: 10px 16px; border-radius: 10px; 
+            background: rgba(255, 255, 255, 0.12); border: 2px solid transparent; 
+            cursor: pointer; transition: all 0.15s ease; 
+            font-weight: bold; font-size: 15px; color: #fff;
+            display: flex; align-items: center; justify-content: center;
+            white-space: nowrap;
+        }
+        
+        .hoverable.activated { 
+            border-color: var(--accent-cyan); 
+            box-shadow: 0 0 20px var(--accent-cyan); 
+            transform: scale(1.08); 
+            background: rgba(0, 242, 254, 0.3);
+        }
+
+        .btn-clear-draw { background: rgba(255, 165, 0, 0.15); }
+        .btn-clear-draw.activated { border-color: #ffa500; box-shadow: 0 0 20px #ffa500; background: rgba(255, 165, 0, 0.35); }
+
+        .btn-clear-emojis { background: rgba(255, 51, 102, 0.15); }
+        .btn-clear-emojis.activated { border-color: var(--accent-red); box-shadow: 0 0 20px var(--accent-red); background: rgba(255, 51, 102, 0.35); }
+
+        .control-section { display: flex; align-items: center; gap: 6px; border-right: 2px solid rgba(255,255,255,0.2); padding-right: 12px; }
+        .section-label { font-size: 13px; color: rgba(255,255,255,0.8); font-weight: bold; }
+        
+        .color-group { display: flex; gap: 8px; border-right: 2px solid rgba(255,255,255,0.2); padding-right: 12px; }
+        .color-swatch { width: 34px; height: 34px; border-radius: 50%; padding: 0; }
+
+        /* تعديل التصميم: شفاف بالكامل 100% بدون أي ضبابية أو غباش نهائياً */
+        #emojiPanel {
+            width: 540px; 
+            min-height: 190px;
+            background: transparent; /* شفاف تماماً كالهواء */
+            border: 2px solid rgba(255, 255, 255, 0.25); /* إطار رفيع جداً ومحدد */
+            border-radius: 20px; 
+            padding: 20px;
+            transition: all 0.25s ease-in-out; opacity: 0; display: none;
+            box-shadow: none; /* إلغاء الظل الثقيل لمنع أي تظليل خلفي */
+            backdrop-filter: none; /* تم إلغاء الضبابية بالكامل بناءً على طلبك */
+        }
+        #emojiPanel.open { display: block; opacity: 1; }
+        
+        .emoji-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 12px; }
+        .emoji-item { font-size: 30px; background: transparent; border: 2px solid transparent; border-radius: 10px; padding: 6px; line-height: 1; display: flex; align-items: center; justify-content: center; }
+        .emoji-item.activated { border-color: var(--accent-cyan); box-shadow: 0 0 15px var(--accent-cyan); background: rgba(0, 242, 254, 0.25); }
+
+        #modeDisplay { position: absolute; top: 140px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); padding: 6px 20px; border-radius: 20px; font-size: 14px; z-index: 6; color: var(--accent-cyan); font-weight: bold; border: 1px solid rgba(255,255,255,0.15); }
+    </style>
+</head>
+<body>
+
+    <video id="webcam" autoplay playsinline muted></video>
+
+    <div id="canvasContainer">
+        <canvas id="drawingCanvas"></canvas>
+        <canvas id="emojiCanvas"></canvas>
+        <canvas id="interactionCanvas"></canvas>
+    </div>
+
+    <div class="ui-header-container">
+        <div class="ui-panel">
+            <div id="companyLogo">
+                <div id="logoPlaceholder">LOGO</div>
+            </div>
+
+            <button class="hoverable" data-action="toggle-panel">🎭 الإيموجي</button>
+            <button class="hoverable btn-clear-draw" data-action="clear-drawing">✏️ مسح الكتابة</button>
+            <button class="hoverable btn-clear-emojis" data-action="clear-emojis">🗑️ مسح الإيموجي</button>
+            
+            <div class="control-section">
+                <span class="section-label">الخط:</span>
+                <button class="hoverable" data-action="size-down" style="padding: 4px 10px;">-</button>
+                <span id="sizeTxt" style="font-size:15px; min-width:22px; text-align:center; font-weight: bold;">12</span>
+                <button class="hoverable" data-action="size-up" style="padding: 4px 10px;">+</button>
+            </div>
+
+            <div class="control-section">
+                <span class="section-label">الإيموجي:</span>
+                <button class="hoverable" data-action="emoji-size-down" style="padding: 4px 10px;">-</button>
+                <span id="emojiSizeTxt" style="font-size:15px; min-width:22px; text-align:center; font-weight: bold;">50</span>
+                <button class="hoverable" data-action="emoji-size-up" style="padding: 4px 10px;">+</button>
+            </div>
+
+            <div class="color-group">
+                <div class="hoverable color-swatch" data-action="color" data-value="#00f2fe" style="background: #00f2fe;"></div>
+                <div class="hoverable color-swatch" data-action="color" data-value="#00ff88" style="background: #00ff88;"></div>
+                <div class="hoverable color-swatch" data-action="color" data-value="#ff007f" style="background: #ff007f;"></div>
+            </div>
+        </div>
+
+        <div id="emojiPanel">
+            <div class="emoji-grid" id="emojiGrid"></div>
+        </div>
+    </div>
+
+    <div id="modeDisplay">جاري تشغيل النظام...</div>
+
+    <script>
+        const state = {
+            color: '#00f2fe', 
+            size: 12,          
+            emojiSize: 50,    
+            mode: 'STANDBY', panelOpen: false,
+            lastX: null, lastY: null, smoothX: 0, smoothY: 0, 
+            alpha: 0.75,      // تم موازنتها لتعطي نعومة فائقة عند السحب السريع
+            hoverTarget: null, hoverStart: null, hoverDuration: 250, 
+            lastToggleTime: 0, heldEmoji: null,
+            isTracking: false,
+            jitterThreshold: 2.5 // المسافة بالبكسل لإلغاء نويز الكاميرا وتثبيت المؤشر تماماً عند السكون
+        };
+
+        const emojis = ['👑', '🦁', '🤩', '😎', '😂', '🥳', '✨', '🔥', '❤️', '💡', '🚀', '⭐', '🎨', '🎉', '🎈', '⚡', '💯', '🌈', '🌍', '💎', '🍿', '👻', '🎮', '🌸'];
+
+        const dCanvas = document.getElementById('drawingCanvas');
+        const dCtx = dCanvas.getContext('2d');
+        const eCanvas = document.getElementById('emojiCanvas');
+        const eCtx = eCanvas.getContext('2d');
+        const iCanvas = document.getElementById('interactionCanvas');
+        const iCtx = iCanvas.getContext('2d');
+        const video = document.getElementById('webcam');
+        const modeDisplay = document.getElementById('modeDisplay');
+        const sizeTxt = document.getElementById('sizeTxt');
+        const emojiSizeTxt = document.getElementById('emojiSizeTxt');
+        const emojiPanel = document.getElementById('emojiPanel');
+
+        function initCanvases() {
+            const tempD = document.createElement('canvas'); tempD.width = dCanvas.width; tempD.height = dCanvas.height;
+            if (dCanvas.width > 0) tempD.getContext('2d').drawImage(dCanvas, 0, 0);
+
+            const tempE = document.createElement('canvas'); tempE.width = eCanvas.width; tempE.height = eCanvas.height;
+            if (eCanvas.width > 0) tempE.getContext('2d').drawImage(eCanvas, 0, 0);
+
+            dCanvas.width = window.innerWidth; dCanvas.height = window.innerHeight;
+            eCanvas.width = window.innerWidth; eCanvas.height = window.innerHeight;
+            iCanvas.width = window.innerWidth; iCanvas.height = window.innerHeight;
+            
+            if (tempD.width > 0) dCtx.drawImage(tempD, 0, 0);
+            if (tempE.width > 0) eCtx.drawImage(tempE, 0, 0);
+        }
+        window.addEventListener('resize', initCanvases);
+        initCanvases();
+
+        const grid = document.getElementById('emojiGrid');
+        emojis.forEach(e => {
+            const div = document.createElement('div');
+            div.className = 'hoverable emoji-item';
+            div.innerText = e;
+            div.setAttribute('data-action', 'pick-emoji');
+            div.setAttribute('data-value', e);
+            grid.appendChild(div);
+        });
+
+        function checkAirInteraction(x, y) {
+            if (state.heldEmoji) { state.hoverTarget = null; return; }
+
+            const hoverables = document.querySelectorAll('.ui-panel .hoverable, #emojiPanel .hoverable');
+            let found = null;
+
+            for (let el of hoverables) {
+                const rect = el.getBoundingClientRect();
+                if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+                    if (el.classList.contains('emoji-item') && !state.panelOpen) continue;
+                    found = el; break;
+                }
+            }
+
+            if (found) {
+                if (state.hoverTarget === found) {
+                    if (Date.now() - state.hoverStart >= state.hoverDuration) {
+                        triggerAction(found); state.hoverTarget = null; state.hoverStart = null;
+                    }
+                } else { state.hoverTarget = found; state.hoverStart = Date.now(); }
+            } else { state.hoverTarget = null; state.hoverStart = null; }
+        }
+
+        function triggerAction(el) {
+            const act = el.getAttribute('data-action');
+            const val = el.getAttribute('data-value');
+
+            if (act === 'toggle-panel' && Date.now() - state.lastToggleTime < 400) return;
+
+            el.classList.add('activated');
+            setTimeout(() => el.classList.remove('activated'), 200);
+
+            if (act === 'color') state.color = val;
+            
+            if (act === 'size-up') { state.size = Math.min(60, state.size + 2); sizeTxt.innerText = state.size; }
+            if (act === 'size-down') { state.size = Math.max(4, state.size - 2); sizeTxt.innerText = state.size; }
+            
+            if (act === 'emoji-size-up') { state.emojiSize = Math.min(150, state.emojiSize + 5); emojiSizeTxt.innerText = state.emojiSize; }
+            if (act === 'emoji-size-down') { state.emojiSize = Math.max(16, state.emojiSize - 5); emojiSizeTxt.innerText = state.emojiSize; }
+
+            if (act === 'toggle-panel') { 
+                state.panelOpen = !state.panelOpen; 
+                emojiPanel.classList.toggle('open', state.panelOpen); 
+                state.lastToggleTime = Date.now();
+            }
+            if (act === 'pick-emoji') { 
+                state.heldEmoji = val;
+                state.panelOpen = false;
+                emojiPanel.classList.remove('open');
+            }
+            if (act === 'clear-emojis') { eCtx.clearRect(0, 0, eCanvas.width, eCanvas.height); }
+            if (act === 'clear-drawing') { dCtx.clearRect(0, 0, dCanvas.width, dCanvas.height); }
+        }
+
+        function detectGesture(hl) {
+            const wrist = hl[0];
+            const index = hl[8]; const middle = hl[12]; const ring = hl[16]; const pinky = hl[20];
+            const base = Math.hypot(index.x - wrist.x, index.y - wrist.y);
+            
+            const iExt = index.y < wrist.y && Math.hypot(index.x - wrist.x, index.y - wrist.y) > base * 0.9;
+            const mExt = middle.y < wrist.y && Math.hypot(middle.x - wrist.x, middle.y - wrist.y) > base * 0.6;
+            const rExt = ring.y < wrist.y && Math.hypot(ring.x - wrist.x, ring.y - wrist.y) > base * 0.6;
+            const pExt = pinky.y < wrist.y && Math.hypot(pinky.x - wrist.x, pinky.y - wrist.y) > base * 0.6;
+
+            if (iExt && mExt && rExt && pExt) return 'ERASE'; 
+            if (!iExt && !mExt && !rExt) return 'PAUSE'; 
+            if (iExt && !mExt) return 'DRAW'; 
+            return 'STANDBY';
+        }
+
+        function onResults(results) {
+            iCtx.clearRect(0, 0, iCanvas.width, iCanvas.height);
+
+            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+                state.isTracking = false;
+                modeDisplay.innerText = "ابحث عن يدك أمام الكاميرا...";
+                return;
+            }
+
+            const hl = results.multiHandLandmarks[0];
+            const rawX = (1 - hl[8].x) * iCanvas.width;
+            const rawY = hl[8].y * iCanvas.height;
+
+            if (!state.isTracking) { 
+                state.smoothX = rawX; 
+                state.smoothY = rawY; 
+                state.lastX = rawX;
+                state.lastY = rawY;
+                state.isTracking = true;
+            } else {
+                // حساب المسافة بين الإحداثيات الحالية والسابقة
+                const dist = Math.hypot(rawX - state.smoothX, rawY - state.smoothY);
+                // إذا كانت الحركة أكبر من الحد المسموح، نقوم بالتحديث، وإلا يثبت تماماً في مكانه بنسبة 100%
+                if (dist > state.jitterThreshold) {
+                    state.smoothX += state.alpha * (rawX - state.smoothX);
+                    state.smoothY += state.alpha * (rawY - state.smoothY);
+                }
+            }
+
+            state.mode = detectGesture(hl);
+            modeDisplay.innerText = state.heldEmoji ? `حرك يدك وافتح كفك 🖐️ لتثبيت: ${state.heldEmoji}` : `الوضع الفعلي: ${state.mode}`;
+
+            checkAirInteraction(state.smoothX, state.smoothY);
+
+            if (state.mode === 'DRAW') {
+                if (!state.heldEmoji) {
+                    dCtx.beginPath(); 
+                    dCtx.moveTo(state.lastX, state.lastY); 
+                    dCtx.lineTo(state.smoothX, state.smoothY);
+                    dCtx.strokeStyle = state.color; dCtx.lineWidth = state.size; dCtx.lineCap = 'round'; dCtx.lineJoin = 'round';
+                    dCtx.shadowBlur = state.size * 1.2; dCtx.shadowColor = state.color;
+                    dCtx.stroke(); dCtx.shadowBlur = 0;
+                }
+                state.lastX = state.smoothX; state.lastY = state.smoothY;
+            } else if (state.mode === 'ERASE') {
+                if (state.heldEmoji) {
+                    eCtx.font = `${state.emojiSize}px Arial`; eCtx.textAlign = 'center'; eCtx.textBaseline = 'middle';
+                    eCtx.fillText(state.heldEmoji, state.smoothX, state.smoothY);
+                    state.heldEmoji = null; 
+                }
+                state.lastX = state.smoothX; state.lastY = state.smoothY;
+            } else {
+                state.lastX = state.smoothX; state.lastY = state.smoothY;
+            }
+
+            // رسم مؤشر الرأس المضيء الثابت والمستقر تماماً
+            iCtx.beginPath(); iCtx.arc(state.smoothX, state.smoothY, state.size/2 + 8, 0, 2*Math.PI);
+            iCtx.fillStyle = state.color; iCtx.fill(); iCtx.strokeStyle = '#fff'; iCtx.lineWidth = 2; iCtx.stroke();
+
+            // الإيموجي ملتصق بالإصبع بشكل فوري ومستقر
+            if (state.heldEmoji) {
+                iCtx.font = `${state.emojiSize}px Arial`; iCtx.textAlign = 'center'; iCtx.textBaseline = 'middle';
+                iCtx.fillText(state.heldEmoji, state.smoothX, state.smoothY);
+            }
+
+            // عداد الدائرة الزمنية فوق الأزرار
+            if (state.hoverTarget && state.hoverStart) {
+                let ratio = Math.min(1, (Date.now() - state.hoverStart) / state.hoverDuration);
+                iCtx.beginPath(); iCtx.arc(state.smoothX, state.smoothY, state.size/2 + 14, -Math.PI/2, (-Math.PI/2) + (2*Math.PI*ratio));
+                iCtx.strokeStyle = 'var(--accent-cyan)'; iCtx.lineWidth = 3; iCtx.stroke();
+            }
+        }
+
+        const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+        
+        // رفع الحساسية وسرعة معالجة الفريمات لمنع التقطيع نهائياً
+        hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.7 });
+        hands.onResults(onResults);
+
+        const camera = new Camera(video, {
+            onFrame: async () => { await hands.send({ image: video }); },
+            width: 1280, height: 720
+        });
+        camera.start().then(() => modeDisplay.innerText = "النظام جاهز تماماً! المؤشر الآن ثابت 100% على إصبع السبابة.");
+    </script>
+</body>
+</html>
